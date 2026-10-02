@@ -225,7 +225,8 @@ export async function resolveVideoIds(query, ylog = () => {}) {
 
 // ---------- AUDIUS + ARCHIVE (free full MP3, no key) ----------
 export async function audiusFull(t, ylog = () => {}) {
-  const variants = [...new Set([t.trackName + ' ' + t.artistName, t.trackName])];
+  const query = t.trackName + ' ' + t.artistName;
+  const variants = [...new Set([query, t.trackName])];
   const hosts = ['discoveryprovider.audius.co', 'discoveryprovider2.audius.co', 'discoveryprovider3.audius.co'];
   const target = (t.trackTimeMillis || 200000) / 1000;
   const jobs = [];
@@ -235,20 +236,23 @@ export async function audiusFull(t, ylog = () => {}) {
       const to = setTimeout(() => c.abort(), 6000);
       try {
         const r = await fetch('https://' + h + '/v1/tracks/search?query=' + encodeURIComponent(v) + '&app_name=spotifyclone&limit=10', { signal: c.signal });
+        if (!r.ok) throw new Error('http ' + r.status);
         const d = await r.json();
-        const tracks = (d.data || []).filter((x) => x.is_streamable !== false && x.duration && x.duration > 60 && x.id);
-        if (!tracks.length) throw new Error('empty');
-        tracks.sort((a, b) => Math.abs(a.duration - target) - Math.abs(b.duration - target));
-        const best = tracks[0];
-        if (Math.abs(best.duration - target) > 90) throw new Error('no-match');
-        return { best, h };
+        // I-score ang titulo (dili length ra) — isalikway ang sayop nga kanta.
+        const cands = (d.data || [])
+          .filter((x) => x.is_streamable !== false && x.duration && x.duration > 60 && x.id)
+          .map((x) => ({ x, titleScore: scoreVideo(x.title || '', query), durDiff: Math.abs(x.duration - target) }))
+          .filter((x) => x.titleScore >= 12 && x.durDiff <= 30);
+        if (!cands.length) throw new Error('no-match');
+        cands.sort((a, b) => b.titleScore - a.titleScore || a.durDiff - b.durDiff);
+        return { best: cands[0].x, h, score: cands[0].titleScore };
       } finally { clearTimeout(to); }
     })());
   }
   try {
-    const { best, h } = await Promise.any(jobs);
+    const { best, h, score } = await Promise.any(jobs);
     ylog('audius OK: ' + (best.title || '').slice(0, 50));
-    return { url: 'https://' + h + '/v1/tracks/' + best.id + '/stream?app_name=spotifyclone', via: 'Audius' };
+    return { url: 'https://' + h + '/v1/tracks/' + best.id + '/stream?app_name=spotifyclone', via: 'Audius', score };
   } catch (e) { ylog('audius: walay match'); return null; }
 }
 
@@ -256,28 +260,35 @@ export async function archiveFull(t, ylog = () => {}) {
   const c = new AbortController();
   const to = setTimeout(() => c.abort(), 12000);
   try {
-    const q = encodeURIComponent(t.trackName + ' ' + t.artistName);
-    const s = await fetch('https://archive.org/advancedsearch.php?q=' + q + '+AND+mediatype:audio&fl[]=identifier&rows=6&output=json', { signal: c.signal });
+    const query = t.trackName + ' ' + t.artistName;
+    // I-quote ang query para relevant ang results (dili tagsa-tagsa nga pulong).
+    const q = encodeURIComponent('"' + query + '"');
+    const s = await fetch('https://archive.org/advancedsearch.php?q=' + q + '+AND+mediatype:audio&fl[]=identifier,title&rows=6&output=json', { signal: c.signal });
+    if (!s.ok) throw new Error('http ' + s.status);
     const d = await s.json();
-    const docs = ((d.response || {}).docs || []).map((x) => x.identifier).filter(Boolean).slice(0, 3);
+    const docs = ((d.response || {}).docs || []).map((x) => ({ id: x.identifier, title: x.title || '' })).filter((x) => x.id).slice(0, 3);
     if (!docs.length) { ylog('archive: walay result'); return null; }
     const target = (t.trackTimeMillis || 200000) / 1000;
-    const metas = await Promise.all(docs.map((id) =>
-      fetch('https://archive.org/metadata/' + id, { signal: c.signal }).then((r) => r.json()).catch(() => null)
+    const metas = await Promise.all(docs.map((doc) =>
+      fetch('https://archive.org/metadata/' + doc.id, { signal: c.signal }).then((r) => r.json()).then((m) => ({ m, title: doc.title })).catch(() => null)
     ));
     let best = null;
-    for (const m of metas) {
-      if (!m || !m.files || !m.metadata || !m.metadata.identifier) continue;
-      const mp3s = m.files.filter((f) => /\.mp3$/i.test(f.name || '') && !/spectrogram/i.test(f.name || ''));
+    for (const item of metas) {
+      if (!item || !item.m || !item.m.files || !item.m.metadata || !item.m.metadata.identifier) continue;
+      // I-score ang titulo sa item — sayop nga kanta nga parehag length dili ma-pili.
+      const titleScore = scoreVideo((item.m.metadata.title || '') + ' ' + item.title, query);
+      if (titleScore < 12) continue;
+      const mp3s = item.m.files.filter((f) => /\.mp3$/i.test(f.name || '') && !/spectrogram/i.test(f.name || ''));
       for (const f of mp3s) {
         const dur = parseFloat(f.length || 0);
         if (!dur || dur < 60) continue;
-        const score = Math.abs(dur - target);
-        if (!best || score < best.score) best = { score, url: 'https://archive.org/download/' + m.metadata.identifier + '/' + encodeURIComponent(f.name), dur };
+        const durDiff = Math.abs(dur - target);
+        const combined = titleScore - durDiff / 30;
+        if (!best || combined > best.combined) best = { combined, url: 'https://archive.org/download/' + item.m.metadata.identifier + '/' + encodeURIComponent(f.name), dur, score: titleScore };
       }
     }
-    if (best && best.score < 150) { ylog('archive OK (' + Math.round(best.dur) + 's)'); return { url: best.url, via: 'Archive' }; }
-    ylog('archive: walay duol og length');
+    if (best && best.score >= 12) { ylog('archive OK (' + Math.round(best.dur) + 's)'); return { url: best.url, via: 'Archive', score: best.score }; }
+    ylog('archive: walay duol og titulo/length');
     return null;
   } catch (e) { ylog('archive fail'); return null; }
   finally { clearTimeout(to); }

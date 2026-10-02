@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import Sidebar from './components/Sidebar.jsx';
 import Topbar from './components/Topbar.jsx';
 import HomeView from './components/HomeView.jsx';
@@ -29,13 +29,11 @@ export default function App() {
     try { return JSON.parse(localStorage.getItem('sp_liked') || '[]'); }
     catch { return []; }
   });
-  const likedIds = new Set(liked.map((t) => t.trackId));
+  const likedIds = useMemo(() => new Set(liked.map((t) => t.trackId)), [liked]);
 
   // ---------- PLAYER UI ----------
   const [ytStatus, setYtStatus] = useState('Connecting to YouTube...');
   const [ytLive, setYtLive] = useState(false);
-  const [cur, setCur] = useState(0);
-  const [dur, setDur] = useState(0);
   const [toast, setToast] = useState('');
   const [dbgOpen, setDbgOpen] = useState(false);
   const [dbgLines, setDbgLines] = useState([]);
@@ -43,6 +41,7 @@ export default function App() {
   const [apiKey, setApiKey] = useState(() => {
     try { return localStorage.getItem('sp_ytkey') || ''; } catch { return ''; }
   });
+  const [muted, setMuted] = useState(false);
 
   // ---------- REFS (mutable playback state, dili mo-re-render) ----------
   const audioRef = useRef(null);
@@ -50,6 +49,7 @@ export default function App() {
   const ytReady = useRef(false);
   const ytActive = useRef(false);
   const searchToken = useRef(0);
+  const searchSeq = useRef(0);
   const fullToken = useRef(0);
   const resolvingFull = useRef(false);
   const fullAudioActive = useRef(false);
@@ -57,6 +57,7 @@ export default function App() {
   const pendingFullVia = useRef('');
   const playIntent = useRef(false);
   const ytCandidates = useRef([]);
+  const ytDeadRetry = useRef(false);
   const currentQuery = useRef('');
   const cache = useRef(loadVidCache());
   const toastTimer = useRef(null);
@@ -99,14 +100,22 @@ export default function App() {
     }
     for (let attempt = 1; attempt <= 2; attempt++) {
       if (attempt === 2) { ylog('retry full resolve (attempt 2)...'); await new Promise((r) => setTimeout(r, 1500)); }
+      // Ang YouTube ids kay verified na og titulo (oEmbed) — hatagan og higayon
+      // nga mapili ibabaw sa ubos-score nga audio result.
+      const ytJob = resolveVideoIds(q + ' official audio', ylog).then((ids) => { if (ids.length) return { type: 'youtube', ids }; throw new Error('no-yt'); });
       const jobs = [
         youtubeKeySearch(q + ' official audio').then((r) => { if (r) return r; throw new Error('no-key'); }),
-        audiusFull(t, ylog).then((r) => { if (r) return { type: 'audio', url: r.url, via: r.via }; throw new Error('no-audius'); }),
-        archiveFull(t, ylog).then((r) => { if (r) return { type: 'audio', url: r.url, via: r.via }; throw new Error('no-archive'); }),
-        resolveVideoIds(q + ' official audio', ylog).then((ids) => { if (ids.length) return { type: 'youtube', ids }; throw new Error('no-yt'); }),
+        audiusFull(t, ylog).then((r) => { if (r) return { type: 'audio', url: r.url, via: r.via, score: r.score || 0 }; throw new Error('no-audius'); }),
+        archiveFull(t, ylog).then((r) => { if (r) return { type: 'audio', url: r.url, via: r.via, score: r.score || 0 }; throw new Error('no-archive'); }),
+        ytJob,
       ];
       try {
-        const res = await Promise.any(jobs);
+        let res = await Promise.any(jobs);
+        if (res.type === 'audio' && (res.score || 0) < 25) {
+          const grace = new Promise((resolve) => setTimeout(() => resolve(null), 2500));
+          const ytRes = await Promise.race([ytJob.then((r) => r).catch(() => null), grace]);
+          if (ytRes) { ylog('YT verified gipili ibabaw sa ubos-score nga audio'); res = ytRes; }
+        }
         if (res.type === 'youtube') {
           cache.current[cacheKey(t)] = { videoId: res.ids[0] };
           const keys = Object.keys(cache.current);
@@ -163,11 +172,11 @@ export default function App() {
     setCurrentIndex(idx);
     setIsPlaying(false);
     setYtLive(false);
-    setCur(0); setDur(0);
     setYtStatus('Loading FULL version...');
     showToast('Loading FULL: ' + t.trackName);
     ytActive.current = false;
     playIntent.current = true;
+    ytDeadRetry.current = false;
     fullAudioActive.current = false;
     pendingFullUrl.current = null;
     searchToken.current++;
@@ -263,8 +272,10 @@ export default function App() {
     setResults([]);
     // Dili na mag loadYtQuery diri — ang playTrack(0) sa ubos na ang mo-resolve
     // sa FULL para sa actual top result (likay sa race/double-network).
+    const mySearch = ++searchSeq.current;
     try {
       const raw = await itunesSearch(q, 20);
+      if (mySearch !== searchSeq.current) return; // daan nga search — ayaw pag-overwrite
       if (!raw.length) { setResults([]); setSearching(false); return; }
       const ranked = dedupeTracks(raw).sort((a, b) => scoreTrack(b, q) - scoreTrack(a, q));
       ylog('search "' + q + '": ' + raw.length + ' → ' + ranked.length + ' unique');
@@ -342,8 +353,23 @@ export default function App() {
               ylog('suway sunod nga video: ' + nid);
               try { ytPlayer.current.loadVideoById(nid); return; } catch { /* noop */ }
             }
+            // Nahurot ang backup — basin patay na ang naka-cache nga video.
+            // Pangtangtangon sa cache + usa ka auto re-resolve (dili permanente maipit).
+            const { currentTracks: ect, currentIndex: eci } = stateRef.current;
+            const bad = eci >= 0 ? ect[eci] : null;
+            if (bad) {
+              const k = cacheKey(bad);
+              if (cache.current[k]) { delete cache.current[k]; saveCache(); ylog('dead cache gi-pangtangtang'); }
+            }
             ytActive.current = false;
             setIsPlaying(false);
+            if (bad && !ytDeadRetry.current) {
+              ytDeadRetry.current = true;
+              ylog('re-resolve kay patay ang video...');
+              setYtStatus('Bad video — nangita og lain...');
+              playTrackRef.current(eci);
+              return;
+            }
             setYtStatus('YouTube failed — paste link sa ubos');
             showToast('YouTube failed — paste link para FULL');
             setDbgOpen(true);
@@ -366,7 +392,7 @@ export default function App() {
       ytPlayer.current = null;
       ytReady.current = false;
     };
-  }, [handleEnded, showToast, ylog]);
+  }, [handleEnded, saveCache, showToast, ylog]);
 
   useEffect(() => {
     const audio = audioRef.current;
@@ -391,22 +417,6 @@ export default function App() {
     audio.addEventListener('error', onErr);
     return () => { audio.removeEventListener('ended', onEnded); audio.removeEventListener('error', onErr); };
   }, [handleEnded, loadYtQuery, ylog]);
-
-  useEffect(() => {
-    const iv = setInterval(() => {
-      let c = 0, d = 0;
-      try {
-        if (ytReady.current && ytActive.current && ytPlayer.current.getCurrentTime) {
-          c = ytPlayer.current.getCurrentTime(); d = ytPlayer.current.getDuration();
-        } else if (audioRef.current && audioRef.current.src) {
-          c = audioRef.current.currentTime || 0; d = audioRef.current.duration || 0;
-        } else return;
-      } catch { return; }
-      if (!d || isNaN(d)) return;
-      setCur(c); setDur(d);
-    }, 500);
-    return () => clearInterval(iv);
-  }, []);
 
   // ---------- ACTIONS ----------
   const toggleLike = useCallback((t) => {
@@ -555,13 +565,12 @@ export default function App() {
       </div>
 
       <PlayerBar
+        key={track ? track.trackId : 'none'}
         track={track}
         isPlaying={isPlaying}
         liked={track ? likedIds.has(track.trackId) : false}
         ytStatus={ytStatus}
         ytLive={ytLive}
-        cur={cur}
-        dur={dur}
         shuffleOn={shuffleOn}
         repeatMode={repeatMode}
         onPlayPause={onPlayPause}
@@ -571,10 +580,14 @@ export default function App() {
         onRepeat={() => { setRepeatMode((r) => (r + 1) % 3); showToast(['Repeat off', 'Repeat all', 'Repeat one'][(repeatMode + 1) % 3]); }}
         onLike={() => track && toggleLike(track)}
         onSeek={onSeek}
+        muted={muted}
         onMute={() => {
-          const a = audioRef.current;
-          if (a.muted) { a.muted = false; try { ytPlayer.current.unMute(); } catch { /* noop */ } }
-          else { a.muted = true; try { ytPlayer.current.mute(); } catch { /* noop */ } }
+          setMuted((m) => {
+            const next = !m;
+            try { audioRef.current.muted = next; } catch { /* noop */ }
+            try { if (next) ytPlayer.current.mute(); else ytPlayer.current.unMute(); } catch { /* noop */ }
+            return next;
+          });
         }}
         onOpenYt={() => {
           if (!currentQuery.current) { showToast('Wala pay nag-play nga kanta'); return; }
@@ -582,6 +595,10 @@ export default function App() {
         }}
         onToggleDebug={() => setDbgOpen((o) => !o)}
         progressRef={progressRef}
+        audioRef={audioRef}
+        ytPlayerRef={ytPlayer}
+        ytReadyRef={ytReady}
+        ytActiveRef={ytActive}
       />
 
       <audio ref={audioRef} preload="none" />

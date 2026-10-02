@@ -317,7 +317,6 @@ input { font-family: inherit; }
   position: absolute; top: 50%; transform: translate(-50%,-50%); left: 0%;
   opacity: 0; pointer-events: none;
 }
-.bar.vol { max-width: 110px; }
 .p-right { display: flex; align-items: center; gap: 10px; justify-content: flex-end; }
 .yt-badge {
   display: flex; align-items: center; gap: 7px;
@@ -414,7 +413,6 @@ input { font-family: inherit; }
   .p-left { grid-area: info; min-width: 0; }
   .p-right { grid-area: right; justify-content: center; }
   .p-cover { width: 44px; height: 44px; }
-  #btn-mute, #vol-bar, #btn-open-yt { display: none; }
   .yt-badge { font-size: 10px; }
   .foot-cols { grid-template-columns: repeat(2, 1fr); }
 }

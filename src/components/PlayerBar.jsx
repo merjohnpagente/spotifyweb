@@ -1,7 +1,27 @@
+import { useEffect, useState } from 'react';
 import { bigArt, fmt } from '../lib/api.js';
 
-export default function PlayerBar({ track, isPlaying, liked, ytStatus, ytLive, cur, dur, shuffleOn, repeatMode, onPlayPause, onNext, onPrev, onShuffle, onRepeat, onLike, onSeek, onMute, onOpenYt, onToggleDebug, progressRef }) {
+export default function PlayerBar({ track, isPlaying, liked, muted, ytStatus, ytLive, shuffleOn, repeatMode, onPlayPause, onNext, onPrev, onShuffle, onRepeat, onLike, onSeek, onMute, onOpenYt, onToggleDebug, progressRef, audioRef, ytPlayerRef, ytReadyRef, ytActiveRef }) {
   const art = track ? bigArt(track.artworkUrl100, 300) : '';
+  // Ang progress polling kay diri na (dili sa App) — dili na mo-re-render
+  // ang tibuok app kada 500ms samtang ga-tukar.
+  const [cur, setCur] = useState(0);
+  const [dur, setDur] = useState(0);
+  useEffect(() => {
+    const iv = setInterval(() => {
+      let c = 0, d = 0;
+      try {
+        if (ytReadyRef.current && ytActiveRef.current && ytPlayerRef.current.getCurrentTime) {
+          c = ytPlayerRef.current.getCurrentTime(); d = ytPlayerRef.current.getDuration();
+        } else if (audioRef.current && audioRef.current.src) {
+          c = audioRef.current.currentTime || 0; d = audioRef.current.duration || 0;
+        } else return;
+      } catch { return; }
+      if (!d || isNaN(d)) return;
+      setCur(c); setDur(d);
+    }, 500);
+    return () => clearInterval(iv);
+  }, [audioRef, ytPlayerRef, ytReadyRef, ytActiveRef]);
   const pct = dur > 0 ? (cur / dur) * 100 : 0;
 
   return (
@@ -58,8 +78,8 @@ export default function PlayerBar({ track, isPlaying, liked, ytStatus, ytLive, c
           <svg viewBox="0 0 28 20" width="26" height="18"><path fill="#FF0000" d="M27.4 3.1c-.3-1.2-1.3-2.2-2.5-2.5C22.7 0 14 0 14 0S5.3 0 3.1.6C1.9.9.9 1.9.6 3.1 0 5.3 0 10 0 10s0 4.7.6 6.9c.3 1.2 1.3 2.2 2.5 2.5C5.3 20 14 20 14 20s8.7 0 10.9-.6c1.2-.3 2.2-1.3 2.5-2.5.6-2.2.6-6.9.6-6.9s0-4.7-.6-6.9z" /><path fill="#fff" d="M11.2 14.3V5.7L18.5 10l-7.3 4.3z" /></svg>
           <span>{ytStatus}</span>
         </span>
-        <button className="c-btn" title="Volume" onClick={onMute}>
-          <svg viewBox="0 0 16 16" width="16" height="16" fill="currentColor"><path d="M9.741.85a.75.75 0 0 1 .375.65v13a.75.75 0 0 1-1.125.65l-6.925-4a3.642 3.642 0 0 1-1.33-4.967 3.639 3.639 0 0 1 1.33-1.332l6.925-4a.75.75 0 0 1 1.125.649z" /></svg>
+        <button className={'c-btn' + (muted ? ' on' : '')} title={muted ? 'Unmute' : 'Mute'} onClick={onMute}>
+          <svg viewBox="0 0 16 16" width="16" height="16" fill="currentColor"><path d="M9.741.85a.75.75 0 0 1 .375.65v13a.75.75 0 0 1-1.125.65l-6.925-4a3.642 3.642 0 0 1-1.33-4.967 3.639 3.639 0 0 1 1.33-1.332l6.925-4a.75.75 0 0 1 1.125.649z" />{muted && <path d="M11.5 5.5l4 4m0-4l-4 4" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" fill="none" />}</svg>
         </button>
         <button className="c-btn" title="Open YouTube video" onClick={onOpenYt}>
           <svg viewBox="0 0 16 16" width="16" height="16" fill="currentColor"><path d="M6.53 9.47a.75.75 0 0 1 0 1.06l-2.72 2.72h1.018a.75.75 0 0 1 0 1.5H1.25v-3.579a.75.75 0 0 1 1.5 0v1.018l2.72-2.72a.75.75 0 0 1 1.06 0zm2.94-2.94a.75.75 0 0 1 0-1.06l2.72-2.72h-1.018a.75.75 0 1 1 0-1.5h3.578v3.579a.75.75 0 0 1-1.5 0V3.81l-2.72 2.72a.75.75 0 0 1-1.06 0z" /></svg>
