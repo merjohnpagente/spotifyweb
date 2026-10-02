@@ -58,13 +58,14 @@ export default function App() {
   const ytCandidates = useRef([]);
   const currentQuery = useRef('');
   const cache = useRef(loadVidCache());
+  const toastTimer = useRef(null);
   const stateRef = useRef({});
   stateRef.current = { currentTracks, currentIndex, shuffleOn, repeatMode, liked };
 
   const showToast = useCallback((msg) => {
     setToast(msg);
-    clearTimeout(showToast._t);
-    showToast._t = setTimeout(() => setToast(''), 2600);
+    if (toastTimer.current) clearTimeout(toastTimer.current);
+    toastTimer.current = setTimeout(() => setToast(''), 2600);
   }, []);
 
   const ylog = useCallback((msg) => {
@@ -130,6 +131,27 @@ export default function App() {
     else if (rp === 1) playTrackRef.current(0);
     else setIsPlaying(false);
   }, []);
+
+  const loadYtQuery = useCallback((q) => {
+    currentQuery.current = q;
+    if (!ytReady.current || !ytPlayer.current || !ytPlayer.current.loadVideoById) {
+      setYtStatus('Connecting to YouTube...');
+      return;
+    }
+    setYtStatus('Loading full song from YouTube...');
+    const my = ++searchToken.current;
+    resolveVideoIds(q, ylog).then((ids) => {
+      if (my !== searchToken.current) return;
+      if (ids.length) {
+        ytCandidates.current = ids.slice(1);
+        setYtStatus('Found full song — loading...');
+        try { ytPlayer.current.loadVideoById(ids[0]); } catch { /* noop */ }
+        return;
+      }
+      setYtStatus('Full song blocked');
+      showToast('Dili ma-load ang full song (adblock/network?)');
+    });
+  }, [showToast, ylog]);
 
   const playTrack = useCallback((i, list) => {
     const tracks = list || stateRef.current.currentTracks;
@@ -208,30 +230,9 @@ export default function App() {
         }
       }
     });
-  }, [resolveFullSong, showToast, ylog]);
+  }, [resolveFullSong, showToast, ylog, loadYtQuery]);
   const playTrackRef = useRef(playTrack);
   playTrackRef.current = playTrack;
-
-  const loadYtQuery = useCallback((q) => {
-    currentQuery.current = q;
-    if (!ytReady.current || !ytPlayer.current || !ytPlayer.current.loadVideoById) {
-      setYtStatus('Connecting to YouTube...');
-      return;
-    }
-    setYtStatus('Loading full song from YouTube...');
-    const my = ++searchToken.current;
-    resolveVideoIds(q, ylog).then((ids) => {
-      if (my !== searchToken.current) return;
-      if (ids.length) {
-        ytCandidates.current = ids.slice(1);
-        setYtStatus('Found full song — loading...');
-        try { ytPlayer.current.loadVideoById(ids[0]); } catch { /* noop */ }
-        return;
-      }
-      setYtStatus('Full song blocked');
-      showToast('Dili ma-load ang full song (adblock/network?)');
-    });
-  }, [showToast, ylog]);
 
   // ---------- SEARCH ----------
   const doSearch = useCallback(async (q, autoplay = true) => {
@@ -241,7 +242,8 @@ export default function App() {
     setHasSearched(true);
     setSearching(true);
     setResults([]);
-    if (autoplay) loadYtQuery(q + ' official audio');
+    // Dili na mag loadYtQuery diri — ang playTrack(0) sa ubos na ang mo-resolve
+    // sa FULL para sa actual top result (likay sa race/double-network).
     try {
       const raw = await itunesSearch(q, 20);
       if (!raw.length) { setResults([]); setSearching(false); return; }
@@ -257,7 +259,7 @@ export default function App() {
     } catch {
       setSearching(false);
     }
-  }, [loadYtQuery, ylog]);
+  }, [ylog]);
 
   // ---------- INIT: home + YT API + audio events + progress ----------
   useEffect(() => {
@@ -268,7 +270,7 @@ export default function App() {
           itunesSearch('weeknd dua lipa hits', 12),
           itunesSearch('opm hits', 12),
         ]);
-        const pool = [...a, ...b, ...c].filter((v, i, arr) => arr.findIndex((x) => x.trackId === v.trackId) === i);
+        const pool = dedupeTracks([...a, ...b, ...c]);
         setHomePool(pool.length ? pool : DEMO_TRACKS);
         if (pool.length) setCurrentTracks((prev) => (prev.length ? prev : pool.slice(0, 12)));
         else setCurrentTracks((prev) => (prev.length ? prev : DEMO_TRACKS));
@@ -331,13 +333,20 @@ export default function App() {
       });
       return true;
     };
+    let iv, to;
     if (!initPlayer()) {
-      const iv = setInterval(() => { if (initPlayer()) clearInterval(iv); }, 500);
-      const to = setTimeout(() => {
+      iv = setInterval(() => { if (initPlayer()) clearInterval(iv); }, 500);
+      to = setTimeout(() => {
         if (!ytReady.current) { ylog('YT API WALA mo-load — na-block ang youtube.com'); setYtStatus('YouTube blocked'); }
       }, 10000);
-      return () => { clearInterval(iv); clearTimeout(to); };
     }
+    return () => {
+      if (iv) clearInterval(iv);
+      if (to) clearTimeout(to);
+      try { if (ytPlayer.current && ytPlayer.current.destroy) ytPlayer.current.destroy(); } catch { /* noop */ }
+      ytPlayer.current = null;
+      ytReady.current = false;
+    };
   }, [handleEnded, showToast, ylog]);
 
   useEffect(() => {
@@ -433,8 +442,13 @@ export default function App() {
 
   const onNext = () => {
     if (!currentTracks.length) return;
-    if (shuffleOn) playTrack(Math.floor(Math.random() * currentTracks.length));
-    else playTrack(currentIndex + 1 >= currentTracks.length ? (repeatMode === 1 ? 0 : currentTracks.length - 1) : currentIndex + 1);
+    if (shuffleOn) { playTrack(Math.floor(Math.random() * currentTracks.length)); return; }
+    if (currentIndex + 1 >= currentTracks.length) {
+      if (repeatMode === 1) playTrack(0);
+      else setIsPlaying(false);
+      return;
+    }
+    playTrack(currentIndex + 1);
   };
   const onPrev = () => {
     let c = 0;
@@ -572,8 +586,13 @@ export default function App() {
           showToast(apiKey ? 'API key saved — sure full na' : 'API key cleared');
         }}
         onCopy={() => {
-          try { navigator.clipboard.writeText(dbgLines.join('\n')); showToast('Na-copy ang log — i-send nako'); }
-          catch { showToast('Dili ma-copy, screenshot na lang'); }
+          const done = () => showToast('Na-copy ang log — i-send nako');
+          const fail = () => showToast('Dili ma-copy, screenshot na lang');
+          try {
+            const p = navigator.clipboard.writeText(dbgLines.join('\n'));
+            if (p && p.then) p.then(done).catch(fail);
+            else done();
+          } catch { fail(); }
         }}
       />
       {toast && <div id="toast">{toast}</div>}

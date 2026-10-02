@@ -87,9 +87,16 @@ export function scoreVideo(title, q) {
 // ---------- ITUNES SEARCH (free, no API key) ----------
 export async function itunesSearch(term, limit = 20) {
   const url = 'https://itunes.apple.com/search?term=' + encodeURIComponent(term) + '&media=music&entity=song&limit=' + limit;
-  const res = await fetch(url);
-  const data = await res.json();
-  return data.results || [];
+  const c = new AbortController();
+  const to = setTimeout(() => c.abort(), 8000);
+  try {
+    const res = await fetch(url, { signal: c.signal });
+    if (!res.ok) throw new Error('itunes http ' + res.status);
+    const data = await res.json();
+    return data.results || [];
+  } finally {
+    clearTimeout(to);
+  }
 }
 
 export function parseYouTubeId(s) {
@@ -107,6 +114,7 @@ export async function fetchJson(url, ms = 5000) {
   const t = setTimeout(() => c.abort(), ms);
   try {
     const r = await fetch(url, { signal: c.signal });
+    if (!r.ok) throw new Error('http ' + r.status);
     return await r.json();
   } finally { clearTimeout(t); }
 }
