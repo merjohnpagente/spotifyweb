@@ -55,6 +55,7 @@ export default function App() {
   const fullAudioActive = useRef(false);
   const pendingFullUrl = useRef(null);
   const pendingFullVia = useRef('');
+  const playIntent = useRef(false);
   const ytCandidates = useRef([]);
   const currentQuery = useRef('');
   const cache = useRef(loadVidCache());
@@ -166,6 +167,7 @@ export default function App() {
     setYtStatus('Loading FULL version...');
     showToast('Loading FULL: ' + t.trackName);
     ytActive.current = false;
+    playIntent.current = true;
     fullAudioActive.current = false;
     pendingFullUrl.current = null;
     searchToken.current++;
@@ -194,6 +196,23 @@ export default function App() {
         setYtStatus('FULL failed — paste link sa ubos');
         setDbgOpen(true);
         showToast('Dili ma-load ang FULL — paste YouTube link sa ubos');
+        return;
+      }
+      if (!playIntent.current) {
+        // Nag-pause ang user samtang nag-load — i-hold ang FULL, ayaw autoplay.
+        if (res.type === 'audio') {
+          fullAudioActive.current = false;
+          pendingFullUrl.current = res.url;
+          pendingFullVia.current = res.via;
+        } else {
+          ytCandidates.current = res.ids.slice(1);
+          try {
+            if (ytPlayer.current && ytPlayer.current.cueVideoById) ytPlayer.current.cueVideoById(res.ids[0]);
+            else if (ytPlayer.current && ytPlayer.current.loadVideoById) ytPlayer.current.loadVideoById(res.ids[0]);
+          } catch { /* noop */ }
+        }
+        setYtStatus('FULL ready — i-press ang play');
+        ylog('gi-hold ang FULL (nag-pause ka samtang nag-load)');
         return;
       }
       if (res.type === 'audio') {
@@ -411,10 +430,12 @@ export default function App() {
       return;
     }
     if (isPlaying) {
+      playIntent.current = false;
       try { if (ytReady.current && ytActive.current) ytPlayer.current.pauseVideo(); } catch { /* noop */ }
       audio.pause();
       setIsPlaying(false);
     } else {
+      playIntent.current = true;
       if (pendingFullUrl.current && !fullAudioActive.current && !ytActive.current) {
         ylog('retry FULL via ' + pendingFullVia.current);
         audio.src = pendingFullUrl.current;

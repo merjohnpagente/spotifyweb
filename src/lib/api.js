@@ -134,54 +134,92 @@ function extractIds(html) {
   return ids;
 }
 
+// Verify top candidates via YouTube oEmbed (no key, CORS-enabled):
+// i-score ang tinuod nga titulo, isalikway ang klarong sayop (karaoke/cover/wrong song).
+async function verifyIds(ids, query, ylog = () => {}) {
+  if (!ids || ids.length < 2) return ids || [];
+  const checked = await Promise.all(ids.slice(0, 4).map(async (id) => {
+    try {
+      const d = await fetchJson('https://www.youtube.com/oembed?url=' + encodeURIComponent('https://www.youtube.com/watch?v=' + id) + '&format=json', 3500);
+      return { id, s: scoreVideo(d.title || '', query) };
+    } catch { return { id, s: null }; }
+  }));
+  const known = checked.filter((x) => x.s !== null);
+  if (!known.length) return ids; // dili ma-verify — salig sa source order
+  known.sort((a, b) => b.s - a.s);
+  const good = known.filter((x) => x.s >= 15);
+  const ranked = (good.length ? good : known).map((x) => x.id);
+  if (ranked[0] !== ids[0]) ylog('oembed: mas accurate nga match napili (score ' + Math.round((good.length ? good : known)[0].s) + ')');
+  const rest = ids.filter((id) => !ranked.includes(id));
+  return [...ranked, ...rest];
+}
+
 export async function resolveVideoIds(query, ylog = () => {}) {
   const q = encodeURIComponent(query);
   const yurl = encodeURIComponent('https://www.youtube.com/results?search_query=' + q);
-  const piped = (host, rawQ) => async () => {
+  const run = (name, fn) => fn().then((ids) => {
+    if (ids && ids.length) { ylog('OK: ' + name + ' (' + ids.length + ' ids)'); return ids.slice(0, 8); }
+    throw new Error('empty');
+  }).catch(() => { ylog('fail: ' + name); throw new Error('fail'); });
+  const piped = (host) => async () => {
     const d = await fetchJson('https://' + host + '/search?q=' + q + '&filter=videos');
     return (d.items || [])
       .map((v) => ({ id: idFromWatchUrl(v.url), title: v.title || '' }))
       .filter((x) => x.id)
-      .sort((a, b) => scoreVideo(b.title, rawQ) - scoreVideo(a.title, rawQ))
+      .sort((a, b) => scoreVideo(b.title, query) - scoreVideo(a.title, query))
       .map((x) => x.id);
   };
-  const invid = (host, rawQ) => async () => {
+  const invid = (host) => async () => {
     const d = await fetchJson('https://' + host + '/api/v1/search?q=' + q + '&type=video');
     return (Array.isArray(d) ? d : [])
       .map((v) => ({ id: (/^[\w-]{11}$/.test(v.videoId || '') ? v.videoId : null), title: v.title || '' }))
       .filter((x) => x.id)
-      .sort((a, b) => scoreVideo(b.title, rawQ) - scoreVideo(a.title, rawQ))
+      .sort((a, b) => scoreVideo(b.title, query) - scoreVideo(a.title, query))
       .map((x) => x.id);
   };
-  const sources = [
+  // Tier 1: sources nga naay titulo — ma-score og tarong, pinaka-accurate nga match ang mapili.
+  // (Sa una, kinsay pinakapaspas mo-tubag maoy daug bisan sayop nga video.)
+  const scored = [
+    ['piped:adminforge', piped('pipedapi.adminforge.de')],
+    ['piped:kavin', piped('pipedapi.kavin.rocks')],
+    ['piped:leptons', piped('pipedapi.leptons.xyz')],
+    ['piped:r4fo', piped('pipedapi.r4fo.com')],
+    ['invid:f5.si', invid('invidious.f5.si')],
+    ['invid:nadeko', invid('inv.nadeko.net')],
+    ['invid:tux', invid('inv.tux.pizza')],
+    ['lemnoslife', async () => {
+      const d = await fetchJson('https://yt.lemnoslife.com/noKey/search?part=snippet&q=' + q + '&type=video&maxResults=5', 7000);
+      const items = d.items || d.results || [];
+      return items
+        .map((v) => ({ id: v.videoId || ((v.id || {}).videoId) || idFromWatchUrl(v.url), title: v.title || ((v.snippet || {}).title) || '' }))
+        .filter((x) => /^[\w-]{11}$/.test(x.id || ''))
+        .sort((a, b) => scoreVideo(b.title, query) - scoreVideo(a.title, query))
+        .map((x) => x.id);
+    }],
+  ];
+  ylog('resolving "' + query + '" via scored servers...');
+  const tierTimeout = new Promise((_, rej) => setTimeout(() => rej(new Error('tier-timeout')), 7000));
+  try {
+    const ids = await Promise.race([Promise.any(scored.map(([name, s]) => run(name, s))), tierTimeout]);
+    if (ids && ids.length) return await verifyIds(ids.slice(0, 8), query, ylog);
+  } catch { ylog('scored servers palpak — suway scrape fallback...'); }
+  // Tier 2: raw scrape fallback (walay title scoring — last resort lang).
+  const scraped = [
     ['allorigins', async () => {
       const d = await fetchJson('https://api.allorigins.win/get?url=' + yurl);
       return extractIds(d && d.contents);
     }],
     ['corsproxy.io', async () => {
       const r = await fetch('https://corsproxy.io/?url=' + yurl, { signal: AbortSignal.timeout(5000) });
+      if (!r.ok) throw new Error('http ' + r.status);
       return extractIds(await r.text());
     }],
-    ['lemnoslife', async () => {
-      const d = await fetchJson('https://yt.lemnoslife.com/noKey/search?part=snippet&q=' + q + '&type=video&maxResults=5', 7000);
-      const items = d.items || d.results || [];
-      return items.map((v) => v.videoId || ((v.id || {}).videoId) || idFromWatchUrl(v.url)).filter((id) => /^[\w-]{11}$/.test(id || ''));
-    }],
-    ['piped:adminforge', piped('pipedapi.adminforge.de', query)],
-    ['piped:kavin', piped('pipedapi.kavin.rocks', query)],
-    ['piped:leptons', piped('pipedapi.leptons.xyz', query)],
-    ['piped:r4fo', piped('pipedapi.r4fo.com', query)],
-    ['invid:f5.si', invid('invidious.f5.si', query)],
-    ['invid:nadeko', invid('inv.nadeko.net', query)],
-    ['invid:tux', invid('inv.tux.pizza', query)],
   ];
-  ylog('resolving "' + query + '" via ' + sources.length + ' servers...');
-  const jobs = sources.map(([name, s]) => s().then((ids) => {
-    if (ids && ids.length) { ylog('OK: ' + name + ' (' + ids.length + ' ids)'); return ids.slice(0, 8); }
-    throw new Error('empty');
-  }).catch(() => { ylog('fail: ' + name); throw new Error('fail'); }));
   const timeout = new Promise((_, rej) => setTimeout(() => rej(new Error('timeout')), 9000));
-  try { return await Promise.race([Promise.any(jobs), timeout]); }
+  try {
+    const ids = await Promise.race([Promise.any(scraped.map(([name, s]) => run(name, s))), timeout]);
+    return await verifyIds(ids.slice(0, 8), query, ylog);
+  }
   catch (e) { ylog('resolve: TANAN palpak para sa "' + query + '"'); return []; }
 }
 
