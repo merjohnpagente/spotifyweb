@@ -107,6 +107,7 @@ input { font-family: inherit; }
 .topbar {
   display: flex; align-items: center; justify-content: space-between;
   padding: 12px 24px; gap: 12px; position: sticky; top: 0; z-index: 10;
+  background: rgba(18,18,18,.92); backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px);
 }
 .top-left { display: flex; align-items: center; gap: 12px; flex: 1; min-width: 0; }
 .round-btn {
@@ -167,7 +168,7 @@ input { font-family: inherit; }
 .quick-card:hover { background: rgba(255,255,255,.15); }
 .quick-cover { width: 64px; height: 64px; object-fit: cover; flex-shrink: 0; }
 .quick-cover.ph { display: flex; align-items: center; justify-content: center; font-weight: 800; font-size: 20px; color: #fff; }
-.quick-title { font-weight: 700; font-size: 14px; padding: 0 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; flex: 1; }
+.quick-title { font-weight: 700; font-size: 14px; padding: 0 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; flex: 1; min-width: 0; }
 .quick-play {
   width: 44px; height: 44px; border-radius: 50%; background: var(--green);
   display: none; align-items: center; justify-content: center; margin-right: 8px; flex-shrink: 0;
@@ -263,12 +264,6 @@ input { font-family: inherit; }
   display: inline-flex; align-items: center; justify-content: center;
 }
 .big-play:hover { transform: scale(1.04); background: #3be477; }
-.track-table-head {
-  display: grid; grid-template-columns: 28px 1fr 200px 60px;
-  gap: 12px; padding: 8px 10px; color: var(--text-sub); font-size: 13px;
-  border-bottom: 1px solid #2a2a2a; margin-bottom: 8px;
-}
-.t-right { text-align: right; display: flex; justify-content: flex-end; }
 
 /* footer */
 .main-footer { margin-top: 48px; padding-top: 24px; border-top: 1px solid #222; }
@@ -290,7 +285,7 @@ input { font-family: inherit; }
 .p-info p:first-child { font-size: 14px; font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .p-info p:last-child { font-size: 12px; color: var(--text-sub); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .p-info p:last-child:hover { color: #fff; text-decoration: underline; cursor: pointer; }
-.p-center { display: flex; flex-direction: column; align-items: center; gap: 8px; max-width: 700px; width: 100%; margin: 0 auto; }
+.p-center { display: flex; flex-direction: column; align-items: center; gap: 8px; max-width: 700px; width: 100%; margin: 0 auto; min-width: 0; }
 .p-controls { display: flex; align-items: center; gap: 18px; }
 .c-btn { color: var(--text-sub); display: inline-flex; align-items: center; justify-content: center; min-width: 36px; min-height: 36px; border-radius: 50%; }
 .c-btn:hover { color: #fff; background: rgba(255,255,255,.08); }
@@ -317,13 +312,14 @@ input { font-family: inherit; }
   position: absolute; top: 50%; transform: translate(-50%,-50%); left: 0%;
   opacity: 0; pointer-events: none;
 }
-.p-right { display: flex; align-items: center; gap: 10px; justify-content: flex-end; }
+.p-right { display: flex; align-items: center; gap: 10px; justify-content: flex-end; min-width: 0; overflow: hidden; }
 .yt-badge {
   display: flex; align-items: center; gap: 7px;
   background: #1a1a1a; border: 1px solid #333; border-radius: 999px;
   padding: 5px 11px 5px 7px; font-size: 11px; color: var(--text-sub); font-weight: 600;
-  white-space: nowrap;
+  white-space: nowrap; max-width: 100%; overflow: hidden;
 }
+.yt-badge span:last-child { overflow: hidden; text-overflow: ellipsis; }
 .yt-badge.live { color: #fff; border-color: #ff0000; }
 .yt-badge .dot { width: 7px; height: 7px; border-radius: 50%; background: #666; }
 .yt-badge.live .dot { background: #ff0000; animation: blink 1.2s infinite; }
@@ -380,8 +376,6 @@ input { font-family: inherit; }
   .sidebar { width: 260px; }
   .track-album { display: none; }
   .track-row { grid-template-columns: 28px 44px 1fr auto 28px; }
-  .track-table-head { grid-template-columns: 28px 1fr 60px; }
-  .track-table-head span:nth-child(3) { display: none; }
 }
 @media (max-width: 800px) {
   .sidebar { display: none; }
