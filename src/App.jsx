@@ -176,6 +176,9 @@ export default function App() {
     showToast('Loading FULL: ' + t.trackName);
     ytActive.current = false;
     playIntent.current = true;
+    // Patya dayon ang nag-play nga YouTube — kung dili, magdungan og tukar
+    // inig switch ngadto sa Audius/Archive audio (ang audio ra ang mapalong sa ubos).
+    try { if (ytPlayer.current && ytPlayer.current.pauseVideo) ytPlayer.current.pauseVideo(); } catch { /* noop */ }
     ytDeadRetry.current = false;
     fullAudioActive.current = false;
     pendingFullUrl.current = null;
@@ -228,6 +231,8 @@ export default function App() {
         if (ytActive.current) { ylog('full audio skipped — YT na ang ga-tukar'); return; }
         fullAudioActive.current = true;
         pendingFullUrl.current = null;
+        // Siguraduhon nga hilom ang YT sa dili pa mo-play ang audio (likay dungan).
+        try { if (ytPlayer.current && ytPlayer.current.pauseVideo) ytPlayer.current.pauseVideo(); } catch { /* noop */ }
         ylog('FULL audio via ' + res.via);
         setYtStatus('Playing FULL via ' + res.via);
         setYtLive(true);
