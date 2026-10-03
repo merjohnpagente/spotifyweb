@@ -7,7 +7,7 @@ import PlaylistView from './components/PlaylistView.jsx';
 import PlayerBar from './components/PlayerBar.jsx';
 import DebugPanel from './components/DebugPanel.jsx';
 import {
-  archiveFull, audiusFull, cacheKey, dedupeTracks, DEMO_TRACKS,
+  archiveFull, audiusFull, bigArt, cacheKey, dedupeTracks, DEMO_TRACKS,
   fetchJson, itunesSearch, loadVidCache, parseYouTubeId,
   resolveVideoIds, scoreTrack,
 } from './lib/api.js';
@@ -506,6 +506,38 @@ export default function App() {
       try { audioRef.current.currentTime = audioRef.current.duration * f; } catch { /* noop */ }
     }
   };
+
+  const actionsRef = useRef({});
+  useEffect(() => { actionsRef.current = { onPlayPause, onNext, onPrev }; });
+
+  // Lock-screen / background controls (Media Session API): mo-gana ang
+  // play/pause/next/prev sa phone notification ug headset buttons, ug
+  // magpadayon og tukar kung gi-minimize o gi-lock ang screen.
+  // NOTE: kung gi-quit gyud ang Chrome app mismo, mapalong gyud — native app ang kinahanglan para ana.
+  useEffect(() => {
+    if (!('mediaSession' in navigator)) return;
+    try {
+      navigator.mediaSession.setActionHandler('play', () => actionsRef.current.onPlayPause());
+      navigator.mediaSession.setActionHandler('pause', () => actionsRef.current.onPlayPause());
+      navigator.mediaSession.setActionHandler('previoustrack', () => actionsRef.current.onPrev());
+      navigator.mediaSession.setActionHandler('nexttrack', () => actionsRef.current.onNext());
+    } catch { /* noop */ }
+  }, []);
+
+  useEffect(() => {
+    if (!('mediaSession' in navigator)) return;
+    try {
+      navigator.mediaSession.playbackState = isPlaying ? 'playing' : 'paused';
+      if (track) {
+        navigator.mediaSession.metadata = new window.MediaMetadata({
+          title: track.trackName || 'Unknown',
+          artist: track.artistName || '',
+          album: track.collectionName || '',
+          artwork: track.artworkUrl100 ? [{ src: bigArt(track.artworkUrl100, 512), sizes: '512x512', type: 'image/jpeg' }] : [],
+        });
+      }
+    } catch { /* noop */ }
+  }, [track, isPlaying]);
 
   const progressRef = useRef(null);
 
